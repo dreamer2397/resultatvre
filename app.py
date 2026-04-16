@@ -42,7 +42,7 @@ def resolve_columns(df: pd.DataFrame) -> dict[str, str]:
                 resolved[key] = normalized[alias]
                 break
 
-    missing = [k for k in ("code", "groupe_sens", "section", "ca_n", "budget", "ca_n_1", "engage", "chapitre") if k not in resolved]
+    missing = [key for key in expected if key not in resolved]
     if missing:
         raise KeyError(
             "Colonnes manquantes ou non reconnues : "
@@ -53,7 +53,6 @@ def resolve_columns(df: pd.DataFrame) -> dict[str, str]:
     return resolved
 
 
-@st.cache_data(show_spinner=False)
 def load_excel(file) -> pd.DataFrame:
     df = pd.read_excel(file)
     cols = resolve_columns(df)
@@ -76,7 +75,7 @@ def load_excel(file) -> pd.DataFrame:
 
 
 def format_currency(value: float) -> str:
-    return f"{value:,.0f} €".replace(",", " ")
+    return f"{value:_.0f} €".replace("_", " ")
 
 
 def build_dashboard(df: pd.DataFrame) -> None:
@@ -102,16 +101,20 @@ def build_dashboard(df: pd.DataFrame) -> None:
     ca_n = filtered["CA N"].sum()
     budget = filtered["Budget voté"].sum()
     ca_n_1 = filtered["CA N-1"].sum()
-    exec_rate = (ca_n / budget) if budget else 0.0
+    execution_rate = (ca_n / budget) if budget != 0 else None
     variation = ca_n - ca_n_1
-    variation_pct = (variation / ca_n_1) if ca_n_1 else 0.0
+    variation_pct = (variation / ca_n_1) if ca_n_1 != 0 else None
 
     st.subheader("Indicateurs clés")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total réalisé CA N", format_currency(ca_n))
     m2.metric("Total budget voté", format_currency(budget))
-    m3.metric("Taux d'exécution", f"{exec_rate:.1%}")
-    m4.metric("Variation vs CA N-1", format_currency(variation), delta=f"{variation_pct:.1%}")
+    m3.metric("Taux d'exécution", f"{execution_rate:.1%}" if execution_rate is not None else "N/A")
+    m4.metric(
+        "Variation vs CA N-1",
+        format_currency(variation),
+        delta=f"{variation_pct:.1%}" if variation_pct is not None else "N/A",
+    )
 
     by_chapter = (
         filtered.groupby("Chapitre", dropna=False, as_index=False)[["CA N", "Budget voté", "CA N-1", "Engagé HT"]]
@@ -119,14 +122,15 @@ def build_dashboard(df: pd.DataFrame) -> None:
         .sort_values("Chapitre")
     )
 
-    by_chapter["Taux d'exécution"] = by_chapter.apply(
-        lambda row: (row["CA N"] / row["Budget voté"]) if row["Budget voté"] else 0.0,
-        axis=1,
-    )
+    by_chapter["Taux d'exécution"] = (
+        by_chapter["CA N"] / by_chapter["Budget voté"]
+    ).where(by_chapter["Budget voté"] != 0)
 
     st.subheader("Tableau récapitulatif par chapitre")
     table_data = by_chapter.copy()
-    table_data["Taux d'exécution"] = table_data["Taux d'exécution"] * 100
+    table_data["Taux d'exécution"] = table_data["Taux d'exécution"].apply(
+        lambda value: f"{value * 100:.1f}%" if pd.notna(value) else "N/A"
+    )
 
     st.dataframe(
         table_data,
@@ -136,7 +140,7 @@ def build_dashboard(df: pd.DataFrame) -> None:
             "Budget voté": st.column_config.NumberColumn(format="%.0f"),
             "CA N-1": st.column_config.NumberColumn(format="%.0f"),
             "Engagé HT": st.column_config.NumberColumn(format="%.0f"),
-            "Taux d'exécution": st.column_config.NumberColumn(format="%.1f%%"),
+            "Taux d'exécution": st.column_config.TextColumn(),
         },
     )
 
